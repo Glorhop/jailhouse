@@ -1,16 +1,12 @@
 /*
  * Jailhouse, a Linux-based partitioning hypervisor
  *
- * Configuration for linux-demo inmate on Raspberry Pi 4:
- * 2 CPUs, 128M RAM, serial port
+ * Inmate cell configuration for Raspberry Pi 4 (8GB) - SMRS multi-mode system
+ * 2 CPUs (Core 2-3), 4GB RAM, ivshmem only (no direct hardware)
+ * Runs: openEuler + raft_node (OS2, Raft voter, no hardware access)
  *
- * Copyright (c) Siemens AG, 2014-2020
- *
- * Authors:
- *  Jan Kiszka <jan.kiszka@siemens.com>
- *
- * This work is licensed under the terms of the GNU GPL, version 2.  See
- * the COPYING file in the top-level directory.
+ * OS2 participates in Raft consensus and communicates with OS1 via ivshmem.
+ * Cross-board communication via ivshmem-net virtual NIC.
  */
 
 #include <jailhouse/types.h>
@@ -27,7 +23,7 @@ struct {
 		.signature = JAILHOUSE_CELL_DESC_SIGNATURE,
 		.revision = JAILHOUSE_CONFIG_REVISION,
 		.architecture = JAILHOUSE_ARM64,
-		.name = "rpi4-linux-demo",
+		.name = "rpi4-inmate-os2",
 		.flags = JAILHOUSE_CELL_PASSIVE_COMMREG |
 			JAILHOUSE_CELL_VIRTUAL_CONSOLE_PERMITTED,
 
@@ -84,9 +80,9 @@ struct {
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
 				JAILHOUSE_MEM_ROOTSHARED,
 		},
-		/* IVSHMEM shared memory region */
+		/* IVSHMEM shared memory region (networking) */
 		JAILHOUSE_SHMEM_NET_REGIONS(0x1fb00000, 1),
-		/* UART */ {
+		/* UART (shared with root for debug) */ {
 			.phys_start = 0xfe215040,
 			.virt_start = 0xfe215040,
 			.size = 0x40,
@@ -94,17 +90,17 @@ struct {
 				JAILHOUSE_MEM_IO | JAILHOUSE_MEM_IO_8 |
 				JAILHOUSE_MEM_IO_32 | JAILHOUSE_MEM_ROOTSHARED,
 		},
-		/* RAM */ {
-			.phys_start = 0x1f900000,
+		/* RAM (loader) */ {
+			.phys_start = 0x110000000,
 			.virt_start = 0,
 			.size = 0x10000,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
 				JAILHOUSE_MEM_EXECUTE | JAILHOUSE_MEM_LOADABLE,
 		},
-		/* RAM */ {
-			.phys_start = 0x10000000,
-			.virt_start = 0x10000000,
-			.size = 0x8000000,
+		/* RAM (main, 3.75GB at 0x110000000-0x200000000) */ {
+			.phys_start = 0x110000000,
+			.virt_start = 0x110000000,
+			.size =        0xF0000000,    /* 3.75GB */
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
 				JAILHOUSE_MEM_EXECUTE | JAILHOUSE_MEM_DMA |
 				JAILHOUSE_MEM_LOADABLE,
