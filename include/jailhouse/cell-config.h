@@ -322,6 +322,7 @@ struct jailhouse_pio {
  * from the virtual console.
  */
 #define JAILHOUSE_SYS_VIRTUAL_DEBUG_CONSOLE	0x0001
+#define JAILHOUSE_SYS_HAS_PSCI			0x0002
 
 #define SYS_FLAGS_VIRTUAL_DEBUG_CONSOLE(flags) \
 	!!((flags) & JAILHOUSE_SYS_VIRTUAL_DEBUG_CONSOLE)

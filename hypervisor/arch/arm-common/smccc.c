@@ -29,6 +29,21 @@ int smccc_discover(void)
 	cpu_data->smccc_feat_workaround_1 = ARM_SMCCC_NOT_SUPPORTED;
 	cpu_data->smccc_feat_workaround_2 = ARM_SMCCC_NOT_SUPPORTED;
 
+	/*
+	 * Probe PSCI by issuing PSCI_VERSION via HVC first. If the kernel
+	 * was booted with PSCI (via ATF/EL3), the HVC will be handled by
+	 * the kernel's PSCI conduit. If not (e.g. RPi4 spin-table boot),
+	 * HVC from EL2 is undefined but we can catch that safely by
+	 * simply skipping SMCCC discovery.
+	 *
+	 * We cannot use SMC directly because on platforms without EL3
+	 * firmware (RPi4), SMC from EL2 causes a synchronous abort that
+	 * we cannot recover from. Instead, check if PSCI conduit is
+	 * available by looking at the system config flags.
+	 */
+	if (!(system_config->flags & JAILHOUSE_SYS_HAS_PSCI))
+		return 0;
+
 	ret = smc(PSCI_0_2_FN_VERSION);
 
 	/* We need >=PSCIv1.0 for SMCCC. Against the spec, U-Boot may also
