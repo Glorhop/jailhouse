@@ -1,17 +1,12 @@
 /*
  * Jailhouse, a Linux-based partitioning hypervisor
  *
- * Test configuration for Raspberry Pi 4 (quad-core Cortex-A72, 1GB, 2GB, 4GB or 8GB RAM)
+ * Root cell configuration for Raspberry Pi 4 (8GB) - SMRS multi-mode system
+ * Root Cell: Core 0-1, ~6GB RAM, all hardware peripherals
+ * Runs: openEuler + shadow_driver + raft_node (OS1)
  *
- * Copyright (c) Siemens AG, 2020
- *
- * Authors:
- *  Jan Kiszka <jan.kiszka@siemens.com>
- *
- * This work is licensed under the terms of the GNU GPL, version 2.  See
- * the COPYING file in the top-level directory.
- *
- * Reservation via device tree: reg = <0x0 0x20000000 0x10000000>;
+ * Inmate Cell (OS2) has no direct hardware — communicates via ivshmem only.
+ * cmdline must include: mem=6144M
  */
 
 #include <jailhouse/types.h>
@@ -20,7 +15,7 @@
 struct {
 	struct jailhouse_system header;
 	__u64 cpus[1];
-	struct jailhouse_memory mem_regions[14];
+	struct jailhouse_memory mem_regions[15];
 	struct jailhouse_irqchip irqchips[2];
 	struct jailhouse_pci_device pci_devices[2];
 } __attribute__((packed)) config = {
@@ -127,7 +122,6 @@ struct {
 		},
 
 		/* ~2M reserved for shared memory regions */
-
 		/* 4M reserved for the hypervisor */
 
 		/* RAM (512M-4032M) */ {
@@ -137,14 +131,20 @@ struct {
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
 				JAILHOUSE_MEM_EXECUTE,
 		},
-
-		/* RAM (4096M-8192M) */ {
+		/* RAM (4GB+, 256MB for kernel modules/vmalloc) */ {
 			.phys_start = 0x100000000,
 			.virt_start = 0x100000000,
-			.size = 0x100000000,
+			.size =        0x10000000,   /* 256MB */
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
 				JAILHOUSE_MEM_EXECUTE,
 		},
+		/* RAM (inmate region, mapped for cell load) */ {
+			.phys_start = 0x110000000,
+			.virt_start = 0x110000000,
+			.size =        0xF0000000,   /* 3.75GB */
+			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE,
+		},
+		/* 0x110000000 - 0x200000000: Inmate Cell (3.75GB) */
 	},
 
 	.irqchips = {
