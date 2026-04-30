@@ -97,10 +97,10 @@ struct {
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
 				JAILHOUSE_MEM_EXECUTE | JAILHOUSE_MEM_LOADABLE,
 		},
-		/* RAM (main, 3.75GB at 0x110000000-0x200000000) */ {
-			.phys_start = 0x110000000,
-			.virt_start = 0x110000000,
-			.size =        0xF0000000,    /* 3.75GB */
+		/* RAM (main, starts after 64KB loader alias) */ {
+			.phys_start = 0x110010000,
+			.virt_start = 0x110010000,
+			.size =        0xEFFF0000,
 			.flags = JAILHOUSE_MEM_READ | JAILHOUSE_MEM_WRITE |
 				JAILHOUSE_MEM_EXECUTE | JAILHOUSE_MEM_DMA |
 				JAILHOUSE_MEM_LOADABLE,
