@@ -54,7 +54,21 @@ define DECLARE_TARGETS =
 endef
 
 # prevent deleting intermediate files which would cause rebuilds
+#
+# The guard matters: in inmates/lib/arm64 the template above is never
+# instantiated, so $(targets) expands to nothing and the line degenerates into a
+# bare, global ".SECONDARY:". Since GNU Make 4.4 that global form is mutually
+# exclusive with a global ".NOTINTERMEDIATE:", which the kernel declares in
+# scripts/Kbuild.include whenever it is built by Make > 4.4. The result is a
+# hard stop before a single object is compiled:
+#   *** .NOTINTERMEDIATE and .SECONDARY are mutually exclusive.  Stop.
+# Directories where the template does run (inmates/demos/arm64) pass a non-empty
+# prerequisite list and are unaffected, which is why only this one breaks.
+# Whether it triggers depends purely on the Make building the modules: a host
+# Make 4.3 is fine, while Yocto pulls make-native 4.4.1 and fails.
+ifneq ($(targets),)
 .SECONDARY: $(addprefix $(obj)/,$(targets))
+endif
 
 .SECONDEXPANSION:
 $(obj)/%-linked.o: $(INMATES_LIB)/inmate.lds $$(addprefix $$(obj)/,$$($$*-y)) \
