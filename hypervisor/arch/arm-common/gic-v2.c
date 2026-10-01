@@ -305,8 +305,22 @@ static int gicv2_inject_irq(u16 irq_id, u16 sender)
 
 		/* Check that there is no overlapping */
 		lr = gicv2_read_lr(n);
-		if ((lr & GICH_LR_VIRT_ID_MASK) == irq_id)
+		if ((lr & GICH_LR_VIRT_ID_MASK) == irq_id) {
+			/*
+			 * The guest is still handling this SGI: Linux >= 5.15
+			 * keeps SGIs active until their handler returns. Make
+			 * the entry active+pending so that the guest takes the
+			 * SGI again after deactivating it. Dropping it loses
+			 * IPIs: Linux only sends IPI_CALL_FUNC when the
+			 * target's call queue was empty, so remote wakeups
+			 * stall until that CPU leaves idle on its own.
+			 */
+			if (is_sgi(irq_id) && !(lr & GICH_LR_PENDING_BIT)) {
+				gicv2_write_lr(n, lr | GICH_LR_PENDING_BIT);
+				return 0;
+			}
 			return -EEXIST;
+		}
 	}
 
 	if (first_free == -1)

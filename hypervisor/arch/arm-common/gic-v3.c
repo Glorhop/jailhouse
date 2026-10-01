@@ -564,8 +564,18 @@ static int gicv3_inject_irq(u16 irq_id, u16 sender)
 		 * A strict phys->virt id mapping is used for SPIs, so this test
 		 * should be sufficient.
 		 */
-		if ((u32)lr == irq_id)
+		if ((u32)lr == irq_id) {
+			/*
+			 * The guest is still handling this SGI: make it
+			 * active+pending instead of dropping it, see
+			 * gicv2_inject_irq.
+			 */
+			if (is_sgi(irq_id) && !(lr & ICH_LR_PENDING)) {
+				gicv3_write_lr(n, lr | ICH_LR_PENDING);
+				return 0;
+			}
 			return -EEXIST;
+		}
 	}
 
 	if (free_lr == -1)
