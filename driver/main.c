@@ -111,6 +111,9 @@ static bool console_available;
 static struct resource *hypervisor_mem_res;
 
 static typeof(ioremap_page_range) *ioremap_page_range_sym;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0)
+static typeof(__get_vm_area_caller) *__get_vm_area_caller_sym;
+#endif
 #ifdef CONFIG_X86
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 #define lapic_timer_period	lapic_timer_frequency
@@ -211,7 +214,7 @@ static long get_max_cpus(u32 cpu_set_size,
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0)
 #define __get_vm_area(size, flags, start, end)			\
-	__get_vm_area_caller(size, flags, start, end,		\
+	__get_vm_area_caller_sym(size, flags, start, end,		\
 			     __builtin_return_address(0))
 #endif
 
@@ -973,6 +976,9 @@ static int __init jailhouse_init(void)
 	int err;
 
 	RESOLVE_EXTERNAL_SYMBOL(ioremap_page_range);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0)
+	RESOLVE_EXTERNAL_SYMBOL(__get_vm_area_caller);
+#endif
 #ifdef CONFIG_X86
 	RESOLVE_EXTERNAL_SYMBOL(lapic_timer_period);
 #endif
