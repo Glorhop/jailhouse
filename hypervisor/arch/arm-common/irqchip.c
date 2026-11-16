@@ -252,10 +252,7 @@ void irqchip_set_pending(struct public_per_cpu *cpu_public, u16 irq_id)
 		pending->tail = new_tail;
 	}
 
-	/*
-	 * The unlock has memory barrier semantic on ARM v7 and v8. Therefore
-	 * the change to tail will be visible when sending SGI_INJECT later on.
-	 */
+	/* irqchip_send_sgi orders the tail update before SGI_INJECT. */
 	spin_unlock(&pending->lock);
 
 	/*
@@ -275,6 +272,13 @@ void irqchip_inject_pending(void)
 	u16 irq_id, sender;
 
 	while (pending->head != pending->tail) {
+		/*
+		 * Read the entry only after observing the updated tail.
+		 * Without this, the entry can be read before the tail (both
+		 * are plain loads), returning a stale slot: the wrong IRQ is
+		 * injected and the queued one is lost.
+		 */
+		memory_load_barrier();
 		irq_id = pending->irqs[pending->head];
 		sender = pending->sender[pending->head];
 
@@ -312,6 +316,15 @@ void irqchip_trigger_external_irq(u16 irq_id)
 void irqchip_send_sgi(unsigned int cpu_id, u16 sgi_id)
 {
 	struct sgi sgi;
+
+	/*
+	 * The target acts on state written before this call (pending queue
+	 * tail, event flags). spin_unlock is only a release: it does not keep
+	 * the following GICD_SGIR store (or ICC_SGI1R write) from becoming
+	 * visible first, and the target then finds the queue empty. Complete
+	 * all prior stores before sending.
+	 */
+	dsb(ish);
 
 	sgi.targets = irqchip_get_cpu_target(cpu_id);
 	sgi.cluster_id = irqchip_get_cluster_target(cpu_id);
@@ -398,6 +411,7 @@ void irqchip_cpu_shutdown(struct public_per_cpu *cpu_public)
 
 	/* Migrate interrupts queued in software. */
 	while (pending->head != pending->tail) {
+		memory_load_barrier();
 		irq_id = pending->irqs[pending->head];
 
 		irqchip.inject_phys_irq(irq_id);

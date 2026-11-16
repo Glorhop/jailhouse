@@ -27,3 +27,20 @@ targets += vpci_template.dtb vpci_template.dtb.S
 .SECONDARY: \
         $(obj)/vpci_template.dtb.S \
         $(obj)/vpci_template.dtb
+
+ifeq ($(SRCARCH),arm64)
+PYTHON3 ?= python3
+ccflags-y += -I$(obj)
+
+quiet_cmd_arm64_layout = GEN     $@
+      cmd_arm64_layout = $(PYTHON3) $(src)/../scripts/gen-arm64-entry-layout.py \
+                         --hypervisor-dir $(obj)/../hypervisor --output $@
+
+targets += arm64-entry-layout.h
+$(obj)/arm64-entry-layout.h: $(obj)/../hypervisor/hypervisor.o \
+                           $(obj)/../hypervisor/jailhouse.bin \
+                           $(src)/../scripts/gen-arm64-entry-layout.py FORCE
+	$(call if_changed,arm64_layout)
+
+$(obj)/main.o: $(obj)/arm64-entry-layout.h
+endif

@@ -52,7 +52,12 @@ define DECLARE_TARGETS =
 endef
 
 # prevent deleting intermediate files which would cause rebuilds
+# Guarded for the same reason as inmates/lib/arm64/Makefile.lib: an empty
+# $(targets) turns this into a global ".SECONDARY:", which GNU Make >= 4.4
+# rejects alongside the kernel's global ".NOTINTERMEDIATE:".
+ifneq ($(targets),)
 .SECONDARY: $(addprefix $(obj)/,$(targets))
+endif
 
 # obj/NAME-linked.o: ... obj/$(NAME-y) lib/lib[32].a
 .SECONDEXPANSION:

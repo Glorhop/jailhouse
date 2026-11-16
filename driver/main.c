@@ -111,6 +111,9 @@ static bool console_available;
 static struct resource *hypervisor_mem_res;
 
 static typeof(ioremap_page_range) *ioremap_page_range_sym;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0)
+static typeof(__get_vm_area_caller) *__get_vm_area_caller_sym;
+#endif
 #ifdef CONFIG_X86
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 #define lapic_timer_period	lapic_timer_frequency
@@ -211,15 +214,24 @@ static long get_max_cpus(u32 cpu_set_size,
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0)
 #define __get_vm_area(size, flags, start, end)			\
-	__get_vm_area_caller(size, flags, start, end,		\
+	__get_vm_area_caller_sym(size, flags, start, end,		\
 			     __builtin_return_address(0))
+#endif
+
+#ifdef CONFIG_ARM64
+#include "arm64-entry.h"
 #endif
 
 void *jailhouse_ioremap(phys_addr_t phys, unsigned long virt,
 			unsigned long size)
 {
 	struct vm_struct *vma;
+	pgprot_t prot = PAGE_KERNEL_EXEC;
 
+#ifdef CONFIG_ARM64
+	/* Guest image copies never execute through this Linux alias. */
+	prot = PAGE_KERNEL;
+#endif
 	size = PAGE_ALIGN(size);
 	if (virt)
 		vma = __get_vm_area(size, VM_IOREMAP, virt,
@@ -233,7 +245,7 @@ void *jailhouse_ioremap(phys_addr_t phys, unsigned long virt,
 
 	if (ioremap_page_range_sym((unsigned long)vma->addr,
 				   (unsigned long)vma->addr + size, phys,
-				   PAGE_KERNEL_EXEC)) {
+				   prot)) {
 		vunmap(vma->addr);
 		return NULL;
 	}
@@ -456,6 +468,12 @@ static int jailhouse_cmd_enable(struct jailhouse_system __user *arg)
 
 	header = (struct jailhouse_header *)hypervisor->data;
 
+#ifdef CONFIG_ARM64
+	err = jailhouse_hv_check_firmware(hypervisor);
+	if (err)
+		goto error_release_fw;
+#endif
+
 	err = -EINVAL;
 	if (memcmp(header->signature, JAILHOUSE_SIGNATURE,
 		   sizeof(header->signature)) != 0 ||
@@ -488,8 +506,13 @@ static int jailhouse_cmd_enable(struct jailhouse_system __user *arg)
 	}
 
 	/* Map physical memory region reserved for Jailhouse. */
+#ifdef CONFIG_ARM64
+	hypervisor_mem = jailhouse_hv_ioremap(hv_mem->phys_start, remap_addr,
+					      hv_mem->size);
+#else
 	hypervisor_mem = jailhouse_ioremap(hv_mem->phys_start, remap_addr,
 					   hv_mem->size);
+#endif
 	if (!hypervisor_mem) {
 		pr_err("jailhouse: Unable to map RAM reserved for hypervisor "
 		       "at %08lx\n", (unsigned long)hv_mem->phys_start);
@@ -595,6 +618,17 @@ static int jailhouse_cmd_enable(struct jailhouse_system __user *arg)
 	err = jailhouse_cell_prepare_root(&config->root_cell);
 	if (err)
 		goto error_unmap;
+
+#ifdef CONFIG_ARM64
+	err = jailhouse_hv_protect(hv_mem->phys_start, hv_mem->size);
+	if (err)
+		goto error_free_cell;
+	if (READ_ONCE(prepare_only)) {
+		pr_info("jailhouse: prepare_only verified; no CPU entered EL2\n");
+		err = -EAGAIN;
+		goto error_free_cell;
+	}
+#endif
 
 	error_code = 0;
 
@@ -945,6 +979,8 @@ static unsigned long jh_kallsyms_lookup_name(const char *name)
 			return 0;
 		fn_ptr = (typeof(kallsyms_lookup_name) *)kp.addr;
 		unregister_kprobe(&kp);
+		if (!fn_ptr)
+			return 0;
 	}
 	return fn_ptr(name);
 }
@@ -973,6 +1009,12 @@ static int __init jailhouse_init(void)
 	int err;
 
 	RESOLVE_EXTERNAL_SYMBOL(ioremap_page_range);
+#ifdef CONFIG_ARM64
+	RESOLVE_EXTERNAL_SYMBOL(init_mm);
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,8,0)
+	RESOLVE_EXTERNAL_SYMBOL(__get_vm_area_caller);
+#endif
 #ifdef CONFIG_X86
 	RESOLVE_EXTERNAL_SYMBOL(lapic_timer_period);
 #endif
