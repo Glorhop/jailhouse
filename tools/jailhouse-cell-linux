@@ -305,55 +305,115 @@ jailhouse cell load %s linux-loader.bin -a 0x%x %s -a 0x%x ' %
         return self._zero_page.setup_header.ramdisk_image
 
 
+def initrd_expanded_size(initrd, override=None):
+    """Reserve expanded initramfs bytes in addition to its compressed image."""
+    if override is not None and override <= 0:
+        raise RuntimeError('initrd-unpacked-size must be positive')
+    if not initrd:
+        if override is not None:
+            raise RuntimeError('initrd-unpacked-size requires an initrd')
+        return 0
+    start = initrd.tell()
+    magic = initrd.read(6)
+    initrd.seek(start)
+    size = None
+    try:
+        if magic[:2] == b'\x1f\x8b':
+            size = 0
+            with gzip.GzipFile(fileobj=initrd) as expanded:
+                while True:
+                    chunk = expanded.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+        elif magic in (b'070701', b'070702', b'070707'):
+            size = os.fstat(initrd.fileno()).st_size
+    except (OSError, EOFError) as error:
+        raise RuntimeError('Invalid gzip initramfs') from error
+    finally:
+        initrd.seek(start)
+    if size is None:
+        if override is None:
+            raise RuntimeError(
+                'Unknown initrd format: supply --initrd-unpacked-size')
+        return override
+    if override is not None and override < size:
+        raise RuntimeError(
+            'initrd-unpacked-size is smaller than measured expansion')
+    return max(size, override or 0)
+
+
 class ARMCommon:
     def setup(self, args, config):
         self._cpu_reset_address = config.cpu_reset_address
 
         (self.kernel_image,
          self._kernel_gz) = self.get_uncompressed_kernel(args.kernel)
-        kernel_size = page_align(len(self.kernel_image))
+        kernel_file_size = page_align(len(self.kernel_image))
+        runtime_size = self.kernel_runtime_size(self.kernel_image)
+        kernel_size = page_align(max(len(self.kernel_image), runtime_size))
         kernel_load_offset = self.get_kernel_offset(self.kernel_image)
-        image_size = kernel_load_offset + kernel_size + self.kernel_alignment()
-
-        ramdisk_size = 0
+        factor = args.kernel_decomp_factor
+        if factor is not None and factor < 0:
+            raise RuntimeError('kernel-decomp-factor must be non-negative')
         if args.initrd:
-            ramdisk_size = os.fstat(args.initrd.fileno()).st_size
-            # leave sufficient space between the kernel and the initrd
-            decompression_factor = self.default_decompression_factor()
-            if args.kernel_decomp_factor:
-                decompression_factor = args.kernel_decomp_factor
-            decompression_space = decompression_factor * kernel_size
-            kernel_size += decompression_space
-            image_size += decompression_space
+            # Preserve the default decompression margin, including explicit
+            # zero.
+            if factor is None:
+                factor = self.default_decompression_factor()
+        kernel_size += (factor or 0) * kernel_file_size
+        ramdisk_size = os.fstat(
+            args.initrd.fileno()).st_size if args.initrd else 0
+        expanded_size = initrd_expanded_size(
+            args.initrd, getattr(args, 'initrd_unpacked_size', None))
 
         if not args.dtb:
-            print('No device tree specified', file=sys.stderr)
-            exit(1)
-        # add one page to the DTB size to be safe when extending it
+            raise RuntimeError('No device tree specified')
+        # Reserve property additions, then check the final serialized size.
         dtb_size = page_align(os.fstat(args.dtb.fileno()).st_size) + 0x1000
-        image_size += dtb_size
-
-        # add some pages in case the region contains the loader
-        image_size += 0x2000
-
-        ram_regions = [region for region in config.memory_regions
-                       if region.is_ram() and region.size >= image_size]
-        if not ram_regions:
-            print('No space found to load all images', file=sys.stderr)
-            exit(1)
-
-        self._dtb_addr = ram_regions[0].virt_start
-        if self._dtb_addr == 0:
-            # leave room for the loader
-            self._dtb_addr += 0x2000
-        self._kernel_addr = page_align(self._dtb_addr + dtb_size,
-                                       self.kernel_alignment())
-        self._kernel_addr += kernel_load_offset
-        self._ramdisk_addr = self._kernel_addr + kernel_size
+        self._dtb_capacity = dtb_size
+        selected = None
+        for region in config.memory_regions:
+            if not region.is_loadable_ram():
+                continue
+            dtb_addr = region.virt_start
+            region_end = region.virt_start + region.size
+            if region.virt_start <= self._cpu_reset_address < region_end:
+                # Loader code, its parameter overlay, stack and BSS.
+                dtb_addr = max(dtb_addr, self._cpu_reset_address + 0x10000)
+            kernel_addr = page_align(dtb_addr + dtb_size,
+                                     self.kernel_alignment())
+            kernel_addr += kernel_load_offset
+            ramdisk_addr = page_align(kernel_addr + kernel_size)
+            layout_end = page_align(ramdisk_addr + ramdisk_size)
+            # Include alignment gaps, Image BSS, compressed and expanded
+            # initrd.
+            if layout_end + page_align(expanded_size) <= region_end:
+                selected = region
+                self._dtb_addr, self._kernel_addr = dtb_addr, kernel_addr
+                self._ramdisk_addr = ramdisk_addr
+                self._layout = {
+                    'dtb_ipa': dtb_addr, 'dtb_capacity': dtb_size,
+                    'kernel_ipa': kernel_addr,
+                    'kernel_reserved_bytes': kernel_size,
+                    'initrd_ipa': ramdisk_addr, 'initrd_bytes': ramdisk_size,
+                    'initrd_end_exclusive': ramdisk_addr + ramdisk_size,
+                    'expanded_initramfs_payload_bytes': expanded_size,
+                    'required_end_exclusive': (layout_end +
+                                               page_align(expanded_size)),
+                    'region_end_exclusive': region_end,
+                }
+                break
+        if selected is None:
+            raise RuntimeError(
+                'No space found to load all images and expanded initramfs')
 
         self.params = 'kernel=0x%x dtb=0x%x' % (self._kernel_addr,
                                                 self._dtb_addr)
         self.params = self.params.encode()
+        if len(self.params) >= 256:
+            raise RuntimeError(
+                'Loader parameters exceed 256-byte command line')
 
         self.dtb = DTB(args.dtb.read())
 
@@ -374,7 +434,7 @@ class ARMCommon:
         for region in config.memory_regions:
             # Filter out non-RAM regions and small ones at the start of the
             # cell address space that is used for the loader.
-            if region.is_ram() and \
+            if region.is_loadable_ram() and \
                (region.virt_start > 0 or region.size > 0x10000):
                 reg += struct.pack(reg_format, region.virt_start, region.size)
         self.dtb.set_prop('/memory', 'reg', reg)
@@ -384,10 +444,13 @@ class ARMCommon:
                               args.cmdline.encode() + b'\0')
         if args.initrd:
             self.dtb.set_prop('/chosen', 'linux,initrd-start',
-                              struct.pack(addr_format, arch.ramdisk_address()))
-            end_addr = arch.ramdisk_address() + ramdisk_size
+                              struct.pack(addr_format, self.ramdisk_address()))
+            end_addr = self.ramdisk_address() + ramdisk_size
             self.dtb.set_prop('/chosen', 'linux,initrd-end',
                               struct.pack(addr_format, end_addr))
+
+        if len(self.dtb.get()) > self._dtb_capacity:
+            raise RuntimeError('Modified DTB exceeds reserved capacity')
 
     def params_address(self):
         return self._cpu_reset_address + 0x1000
@@ -447,6 +510,10 @@ class ARM(ARMCommon):
         return 0
 
     @staticmethod
+    def kernel_runtime_size(kernel_image):
+        return len(kernel_image)
+
+    @staticmethod
     def default_decompression_factor():
         return 4
 
@@ -471,6 +538,16 @@ class ARM64(ARMCommon):
     def get_kernel_offset(kernel_image):
         (text_offset,) = struct.unpack_from('<8xQ', kernel_image)
         return text_offset
+
+    @staticmethod
+    def kernel_runtime_size(kernel_image):
+        if len(kernel_image) < 64 or kernel_image[56:60] != b'ARM\x64':
+            raise RuntimeError('Invalid ARM64 Image header')
+        text_offset, image_size, flags = struct.unpack_from(
+            '<QQQ', kernel_image, 8)
+        if not image_size or flags & 1 or text_offset % 4096:
+            raise RuntimeError('Unsupported ARM64 Image format')
+        return image_size
 
     @staticmethod
     def default_decompression_factor():
@@ -705,6 +782,10 @@ parser.add_argument('-w', '--write-params', metavar='PARAMS_FILE',
                          'to the console')
 parser.add_argument('-a', '--arch', metavar='ARCH',
                     help='target architecture')
+parser.add_argument('--initrd-unpacked-size', metavar='BYTES',
+                    type=lambda value: int(value, 0),
+                    help='expanded initramfs capacity (gzip/cpio measured '
+                         'automatically; required for other formats)')
 parser.add_argument('-k', '--kernel-decomp-factor', metavar='FACTOR',
                     type=int,
                     help='decompression factor of the kernel image, used to '
