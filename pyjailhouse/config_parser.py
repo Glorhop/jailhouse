@@ -95,6 +95,15 @@ class MemRegion:
                  JAILHOUSE_MEM.EXECUTE |
                  JAILHOUSE_MEM.DMA))
 
+    def is_loadable_ram(self):
+        # CPU-only guests do not need DMA permission to load Linux images.
+        required = (JAILHOUSE_MEM.READ | JAILHOUSE_MEM.WRITE |
+                    JAILHOUSE_MEM.EXECUTE | JAILHOUSE_MEM.LOADABLE)
+        forbidden = (JAILHOUSE_MEM.IO | JAILHOUSE_MEM.COMM_REGION |
+                     JAILHOUSE_MEM.ROOTSHARED)
+        return (self.size > 0 and self.flags & required == required and
+                not self.flags & forbidden)
+
     def is_comm_region(self):
         return (self.flags & JAILHOUSE_MEM.COMM_REGION) != 0
 
