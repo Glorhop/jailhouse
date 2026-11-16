@@ -33,3 +33,5 @@ hypervisor/arch/*/include/generated
 ci/out
 ci/*.tar.xz
 *.pyc
+
+driver/arm64-entry-layout.h

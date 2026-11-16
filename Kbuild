@@ -67,6 +67,11 @@ $(obj)/driver $(addprefix $(obj)/,$(subdir-y)): $(GEN_CONFIG_MK)
 
 $(obj)/driver $(obj)/hypervisor: $(GEN_VERSION_H)
 
+ifeq ($(SRCARCH),arm64)
+# Complete the exact firmware before the driver binds its executable pages.
+$(obj)/driver: $(obj)/hypervisor
+endif
+
 $(obj)/tools: $(GEN_PCI_DEFS_PY)
 
 endif
