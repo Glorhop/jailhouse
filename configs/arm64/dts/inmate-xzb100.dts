@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Jailhouse, a Linux-based partitioning hypervisor
+ *
+ * Copyright (c) Glorhop, 2026
+ *
+ * Authors:
+ *  Glorhop <1150595033@qq.com>
+ *
+ * This work is licensed under the terms of the GNU GPL, version 2.  See
+ * the COPYING file in the top-level directory.
+ *
+ * Linux inmate device tree for configs/arm64/xzb100-linux.c.
+ * See Documentation/arm64-xz100.md for the required boot/resource audit.
+ */
+
+/dts-v1/;
+
+/ {
+	model = "Jailhouse XZB100 Linux inmate";
+	compatible = "smrs,xzb100-inmate";
+	#address-cells = <2>;
+	#size-cells = <2>;
+	interrupt-parent = <&gic>;
+
+	chosen {
+		bootargs = "console=hvc0 rdinit=/init loglevel=7 cpuidle.off=1 nohz=off irqchip.gicv3_nolpi=1 arm64.nopauth";
+	};
+
+	hypervisor {
+		compatible = "jailhouse,cell";
+		/* Opt in to the SMRS hvc_jailhouse virtual-console driver. */
+		smrs,debug-console-putc;
+	};
+
+	cpus {
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		cpu@10300 {
+			device_type = "cpu";
+			compatible = "arm,cortex-a78", "arm,armv8";
+			reg = <0 0x10300>;
+			enable-method = "psci";
+		};
+	};
+
+	psci {
+		compatible = "arm,psci-0.2";
+		method = "smc";
+	};
+
+	/* The Linux loader updates this node from loadable cell RAM. */
+	memory {
+		device_type = "memory";
+		reg = <0 0xc2010000 0 0x1fff0000>;
+	};
+
+	timer {
+		compatible = "arm,armv8-timer";
+		interrupts = <1 13 8>, <1 14 8>, <1 11 8>, <1 10 8>;
+	};
+
+	gic: interrupt-controller@f400000 {
+		compatible = "arm,gic-v3";
+		#interrupt-cells = <3>;
+		#address-cells = <0>;
+		interrupt-controller;
+		#redistributor-regions = <1>;
+		redistributor-stride = <0 0x20000>;
+		/* CPU7's real RD/SGI frame; root starts with CPU mask 0xff. */
+		reg = <0 0xf400000 0 0x10000>,
+		      <0 0xf520000 0 0x20000>;
+	};
+
+	pci@f800000 {
+		compatible = "pci-host-ecam-generic";
+		device_type = "pci";
+		linux,pci-domain = <0x10>;
+		#address-cells = <3>;
+		#size-cells = <2>;
+		#interrupt-cells = <1>;
+		bus-range = <0 0>;
+		reg = <0 0xf800000 0 0x100000>;
+		ranges = <0x02000000 0 0xf900000 0 0xf900000 0 0x100000>;
+		/* Only dev0/INTA and dev1/INTB are assigned. */
+		interrupt-map-mask = <0xf800 0 0 7>;
+		interrupt-map = <0x0000 0 0 1 &gic 0 556 1>,
+				<0x0800 0 0 2 &gic 0 557 1>;
+	};
+};
